@@ -1,22 +1,6 @@
 """
-Wyckoff Phase Screener
-=======================
-Rileva su una serie storica di prezzi le 4 fasi (in ordine obbligato):
-
-    1) SUPPORT BASE   (Accumulation) - lateralita', range stretto, volatilita' compressa
-    2) OVER LIMIT     (Breakout)     - rottura sopra la resistenza della base, volume alto
-    3) DISCOVERY      (Markup)       - trend rialzista con momentum, RSI alto, volumi sostenuti
-    4) DISTRIBUTION   (Topping)      - prezzo si appiattisce sui massimi, divergenza ribassista RSI
-
-Le fasi devono presentarsi in questo ordine cronologico. Lo screener scansiona
-una lista di ticker via Yahoo Finance (yfinance) e segnala in che fase si trova
-ogni titolo, oltre a eventuali cicli completi individuati nello storico.
-
-Uso rapido:
-    python wyckoff_screener.py --tickers AAPL,MSFT,NVDA
-    python wyckoff_screener.py --file tickers.txt --period 2y
-
-Autore: generato con Claude
+Wyckoff Phase Screener - 80s Retro Hex / Cyberpunk Edition
+==========================================================
 """
 
 import argparse
@@ -27,51 +11,58 @@ from typing import List, Optional
 
 import numpy as np
 import pandas as pd
+from colorama import Fore, Style, init
+from tqdm import tqdm
+
+init(autoreset=True)
 
 try:
     import yfinance as yf
 except ImportError:
-    print("ERRORE: la libreria 'yfinance' non e' installata.")
-    print("Installala con: pip install -r requirements.txt")
+    print(f"{Fore.RED}ERRORE: la libreria 'yfinance' non e' installata.")
     sys.exit(1)
 
 try:
     from scipy.signal import argrelextrema
 except ImportError:
-    print("ERRORE: la libreria 'scipy' non e' installata.")
-    print("Installala con: pip install -r requirements.txt")
+    print(f"{Fore.RED}ERRORE: la libreria 'scipy' non e' installata.")
     sys.exit(1)
 
 
 # =====================================================================
-# CONFIGURAZIONE / SOGLIE (modificabili)
+# BANNER ANNI '80 / ASCII ART
 # =====================================================================
+
+BANNER = f"""{Fore.CYAN}
+░█▀█░█▀█░█▀▀░█▀▀░█▀█░░░█▀▀░█▀▀░█▀▄░█▀▀░█▀▀░█▀█░█▀▀░█▀▄
+░█▀▀░█▀█░█▀▀░█▀▀░█░█░░░▀▀█░█░░░█▀▄░█▀▀░█▀▀░█░█░█▀▀░█▀▄
+░▀░░░▀░▀░▀░░░▀░░░▀▀▀░░░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀░▀
+                                                                                              
+{Fore.MAGENTA}======================================================================
+ [0x57][0x59][0x43][0x4B][0x4F][0x46][0x46] -- SYSTEM v2.0 (1984)
+======================================================================{Style.RESET_ALL}
+"""
 
 @dataclass
 class Config:
-    # --- Support Base ---
-    base_window: int = 20              # giorni della finestra per rilevare la base
-    base_range_pct_max: float = 0.10   # ampiezza massima del range (10% del prezzo medio)
-    base_sma_slope_max: float = 0.02   # pendenza massima della SMA (quasi piatta)
-    base_min_touches: int = 2          # numero minimo di tocchi sul livello di supporto
-    base_touch_tolerance: float = 0.02 # tolleranza % per considerare un "tocco" del supporto
+    base_window: int = 20
+    base_range_pct_max: float = 0.10
+    base_sma_slope_max: float = 0.02
+    base_min_touches: int = 2
+    base_touch_tolerance: float = 0.02
 
-    # --- Over Limit (Breakout) ---
-    breakout_margin: float = 0.02      # % sopra la resistenza per confermare rottura
-    breakout_volume_mult: float = 1.5  # volume minimo = media * questo fattore
-    breakout_lookahead: int = 15       # giorni successivi alla base in cui cercare il breakout
+    breakout_margin: float = 0.02
+    breakout_volume_mult: float = 1.5
+    breakout_lookahead: int = 15
 
-    # --- Discovery (Markup) ---
-    discovery_rsi_min: float = 60.0    # RSI minimo medio nella fase
-    discovery_window: int = 15         # giorni minimi di durata per confermare la fase
-    discovery_volume_mult: float = 1.1 # volume medio minimo rispetto alla media generale
+    discovery_rsi_min: float = 60.0
+    discovery_window: int = 15
+    discovery_volume_mult: float = 1.1
 
-    # --- Distribution ---
-    distribution_window: int = 15      # giorni della finestra per rilevare distribuzione
-    distribution_flatten_pct: float = 0.03  # variazione massima dei massimi (appiattimento)
-    distribution_rsi_drop: float = 5.0      # calo minimo di RSI in divergenza
+    distribution_window: int = 15
+    distribution_flatten_pct: float = 0.03
+    distribution_rsi_drop: float = 5.0
 
-    # --- Indicatori generali ---
     sma_short: int = 20
     sma_long: int = 50
     rsi_period: int = 14
@@ -81,10 +72,6 @@ class Config:
 
 CFG = Config()
 
-
-# =====================================================================
-# INDICATORI TECNICI
-# =====================================================================
 
 def compute_rsi(close: pd.Series, period: int) -> pd.Series:
     delta = close.diff()
@@ -127,10 +114,6 @@ def add_indicators(df: pd.DataFrame, cfg: Config = CFG) -> pd.DataFrame:
     return df
 
 
-# =====================================================================
-# RILEVAMENTO FASI
-# =====================================================================
-
 @dataclass
 class PhaseEvent:
     phase: str
@@ -140,7 +123,6 @@ class PhaseEvent:
 
 
 def detect_support_bases(df: pd.DataFrame, cfg: Config = CFG) -> List[PhaseEvent]:
-    """Individua finestre di consolidamento/base (fase 1)."""
     events = []
     n = len(df)
     w = cfg.base_window
@@ -186,7 +168,7 @@ def detect_support_bases(df: pd.DataFrame, cfg: Config = CFG) -> List[PhaseEvent
                     "touches": int(touches),
                 },
             ))
-            i += w  # salta oltre la base individuata per evitare sovrapposizioni
+            i += w
         else:
             i += 1
 
@@ -194,7 +176,6 @@ def detect_support_bases(df: pd.DataFrame, cfg: Config = CFG) -> List[PhaseEvent
 
 
 def detect_breakout(df: pd.DataFrame, base: PhaseEvent, cfg: Config = CFG) -> Optional[PhaseEvent]:
-    """Cerca la rottura sopra la resistenza della base (fase 2 - Over Limit)."""
     resistance = base.details["resistance_level"]
     start_idx = df.index.get_loc(base.end)
     end_idx = min(start_idx + cfg.breakout_lookahead, len(df) - 1)
@@ -222,16 +203,14 @@ def detect_breakout(df: pd.DataFrame, base: PhaseEvent, cfg: Config = CFG) -> Op
 
 
 def detect_discovery(df: pd.DataFrame, breakout: PhaseEvent, cfg: Config = CFG) -> Optional[PhaseEvent]:
-    """Cerca la fase di markup/momentum dopo il breakout (fase 3 - Discovery)."""
     start_idx = df.index.get_loc(breakout.end)
-    end_idx = min(start_idx + 90, len(df) - 1)  # osserva fino a ~90 giorni dopo
+    end_idx = min(start_idx + 90, len(df) - 1)
     if end_idx - start_idx < cfg.discovery_window:
         return None
 
     window = df.iloc[start_idx:end_idx + 1]
     vol_avg_overall = df["Volume_SMA"].iloc[start_idx]
 
-    # cerca la sotto-finestra piu' lunga che rispetta le condizioni di markup
     best_end = None
     for j in range(cfg.discovery_window, len(window)):
         sub = window.iloc[:j]
@@ -264,7 +243,6 @@ def detect_discovery(df: pd.DataFrame, breakout: PhaseEvent, cfg: Config = CFG) 
 
 
 def detect_distribution(df: pd.DataFrame, discovery: PhaseEvent, cfg: Config = CFG) -> Optional[PhaseEvent]:
-    """Cerca appiattimento dei massimi + divergenza RSI dopo il markup (fase 4 - Distribution)."""
     start_idx = df.index.get_loc(discovery.end)
     end_idx = min(start_idx + 60, len(df) - 1)
     if end_idx - start_idx < cfg.distribution_window:
@@ -274,7 +252,6 @@ def detect_distribution(df: pd.DataFrame, discovery: PhaseEvent, cfg: Config = C
     closes = window["Close"].values
     rsis = window["RSI"].values
 
-    # massimi locali (picchi) su prezzo e RSI
     peak_idx = argrelextrema(closes, np.greater_equal, order=3)[0]
     if len(peak_idx) < 2:
         return None
@@ -302,7 +279,6 @@ def detect_distribution(df: pd.DataFrame, discovery: PhaseEvent, cfg: Config = C
 
 
 def detect_wyckoff_cycles(df: pd.DataFrame, cfg: Config = CFG) -> List[dict]:
-    """Ricostruisce cicli completi (o parziali) rispettando l'ordine cronologico."""
     cycles = []
     bases = detect_support_bases(df, cfg)
 
@@ -323,20 +299,38 @@ def detect_wyckoff_cycles(df: pd.DataFrame, cfg: Config = CFG) -> List[dict]:
 
 
 def current_phase_label(cycles: List[dict]) -> str:
-    """Determina la fase piu' recente rilevata per il titolo."""
     if not cycles:
-        return "nessuna fase rilevata"
+        return "nessuna fase"
     last = cycles[-1]
     order = ["distribution", "discovery", "over_limit", "support_base"]
     for phase in order:
         if phase in last:
             return phase
-    return "nessuna fase rilevata"
+    return "nessuna fase"
 
 
-# =====================================================================
-# SCREENER PRINCIPALE
-# =====================================================================
+def fetch_top_100_large_caps() -> List[str]:
+    print(f"{Fore.CYAN}>> BUS INIT: Searching Top 100 Cap (> $12B)...")
+    try:
+        q = yf.EquityQuery('and', [
+            yf.EquityQuery('gt', ['intradaymarketcap', 12_000_000_000]),
+            yf.EquityQuery('eq', ['region', 'us'])
+        ])
+        scr = yf.Screener()
+        scr.set_body({'size': 100, 'offset': 0, 'sortField': 'intradaymarketcap', 'sortAsc': False, 'query': q.to_dict()})
+        res = scr.response
+        tickers = [item['symbol'] for item in res.get('quotes', [])]
+        if tickers:
+            return tickers[:100]
+    except Exception:
+        pass
+    
+    return [
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "UNH", "JNJ",
+        "JPM", "V", "PG", "XOM", "MA", "HD", "CVX", "MRK", "ABBV", "LLY",
+        "AVGO", "PEP", "KO", "COST", "TMO", "MCD", "WMT", "CSCO", "ACN", "ABT"
+    ]
+
 
 def fetch_data(ticker: str, period: str = "1y", interval: str = "1d") -> Optional[pd.DataFrame]:
     try:
@@ -344,95 +338,113 @@ def fetch_data(ticker: str, period: str = "1y", interval: str = "1d") -> Optiona
         if df.empty:
             return None
         return df
-    except Exception as e:
-        print(f"  [!] Errore scaricando {ticker}: {e}")
+    except Exception:
         return None
 
 
 def screen_ticker(ticker: str, cfg: Config = CFG, period: str = "1y") -> dict:
     df = fetch_data(ticker, period=period)
     if df is None or len(df) < cfg.sma_long + cfg.base_window:
-        return {"ticker": ticker, "status": "dati insufficienti"}
+        return {"ticker": ticker, "status": "dati insufficienti", "passed": False, "current_phase": "N/D"}
 
     df = add_indicators(df, cfg)
     cycles = detect_wyckoff_cycles(df, cfg)
     phase = current_phase_label(cycles)
 
     complete_cycles = sum(1 for c in cycles if "distribution" in c)
+    passed = phase != "nessuna fase"
 
-    result = {
+    return {
         "ticker": ticker,
         "status": "ok",
+        "passed": passed,
         "current_phase": phase,
         "cicli_rilevati": len(cycles),
         "cicli_completi": complete_cycles,
         "ultimo_prezzo": round(float(df["Close"].iloc[-1]), 2),
     }
 
-    if cycles:
-        last = cycles[-1]
-        for phase_name, ev in last.items():
-            result[f"{phase_name}_start"] = ev.start.strftime("%Y-%m-%d")
-            result[f"{phase_name}_end"] = ev.end.strftime("%Y-%m-%d")
-
-    return result
-
 
 def screen_tickers(tickers: List[str], cfg: Config = CFG, period: str = "1y") -> pd.DataFrame:
     rows = []
-    for t in tickers:
+    
+    # Barra personalizzata stile retrò
+    pbar = tqdm(
+        tickers,
+        desc=f"{Fore.MAGENTA}[0xSCANNING]{Style.RESET_ALL}",
+        bar_format="{l_bar}{bar:25}{r_bar}",
+        colour="cyan"
+    )
+
+    for t in pbar:
         t = t.strip().upper()
         if not t:
             continue
-        print(f"Analizzo {t}...")
-        rows.append(screen_ticker(t, cfg, period))
+        pbar.set_postfix_str(f"0xHEX_ADDR: {t}")
+        res = screen_ticker(t, cfg, period)
+        rows.append(res)
+
     return pd.DataFrame(rows)
 
 
-# =====================================================================
-# CLI
-# =====================================================================
-
 def parse_args():
-    parser = argparse.ArgumentParser(description="Wyckoff Phase Screener")
-    parser.add_argument("--tickers", type=str, help="Lista ticker separati da virgola (es. AAPL,MSFT)")
+    parser = argparse.ArgumentParser(description="Wyckoff Phase Screener - 80s Edition")
+    parser.add_argument("--tickers", type=str, help="Lista ticker separati da virgola")
     parser.add_argument("--file", type=str, help="File .txt con un ticker per riga")
-    parser.add_argument("--period", type=str, default="1y", help="Periodo storico (es. 6mo, 1y, 2y)")
+    parser.add_argument("--top100", action="store_true", help="Analizza i primi 100 titoli per Market Cap (>12B)")
+    parser.add_argument("--period", type=str, default="1y", help="Periodo storico")
     parser.add_argument("--output", type=str, default="wyckoff_results.csv", help="File CSV di output")
     return parser.parse_args()
 
 
 def main():
-    args = parse_args()
+    print(BANNER)
 
+    args = parse_args()
     tickers: List[str] = []
-    if args.tickers:
+
+    if args.top100:
+        tickers = fetch_top_100_large_caps()
+    elif args.tickers:
         tickers.extend(args.tickers.split(","))
-    if args.file:
+    elif args.file:
         with open(args.file, "r", encoding="utf-8") as f:
             tickers.extend(line.strip() for line in f if line.strip())
 
     if not tickers:
-        print("Nessun ticker specificato.")
-        print("Uso: python wyckoff_screener.py --tickers AAPL,MSFT,NVDA")
-        print("  oppure: python wyckoff_screener.py --file tickers.txt")
-        entered = input("\nInserisci ticker separati da virgola: ").strip()
-        if not entered:
-            sys.exit(0)
-        tickers = entered.split(",")
+        print(f"{Fore.GREEN}>> SELECT SYSTEM OPERATION:")
+        print(" [0x01] EXECUTE SCAN: TOP 100 LARGE CAPS (> $12B)")
+        print(" [0x02] LOAD MEMORY FILE: tickers.txt")
+        choice = input(f"\n{Fore.YELLOW}ENTER OPTION (1/2): {Style.RESET_ALL}").strip()
 
-    print(f"\n=== Wyckoff Screener - {datetime.now().strftime('%Y-%m-%d %H:%M')} ===\n")
+        if choice == "1":
+            tickers = fetch_top_100_large_caps()
+        elif choice == "2":
+            with open("tickers.txt", "r", encoding="utf-8") as f:
+                tickers = [line.strip() for line in f if line.strip()]
+        else:
+            sys.exit(0)
+
+    print(f"\n{Fore.GREEN}>> SYSTEM READY. STARTING ANALYSIS AT {datetime.now().strftime('%H:%M:%S')}...\n")
+    
     results = screen_tickers(tickers, CFG, period=args.period)
 
-    print("\n--- RISULTATI ---")
+    print(f"\n{Fore.MAGENTA}======================================================================")
+    print(f"{Fore.CYAN}                      [0xOUTPUT] SCAN RESULTS                        ")
+    print(f"{Fore.MAGENTA}======================================================================\n{Style.RESET_ALL}")
+    
     if not results.empty:
-        cols_show = ["ticker", "status", "current_phase", "cicli_rilevati", "cicli_completi", "ultimo_prezzo"]
+        results["STATUS"] = results["passed"].apply(lambda x: f"{Fore.GREEN}✅ PASS" if x else f"{Fore.RED}❌ NO")
+        
+        cols_show = ["STATUS", "ticker", "current_phase", "ultimo_prezzo", "cicli_rilevati"]
         cols_show = [c for c in cols_show if c in results.columns]
+
+        pd.set_option('display.max_rows', 150)
+        pd.set_option('display.width', 1000)
         print(results[cols_show].to_string(index=False))
-        results.to_csv(args.output, index=False)
-        print(f"\nRisultati completi salvati in: {args.output}")
-    else:
-        print("Nessun risultato.")
+
+        results.drop(columns=["STATUS"], errors="ignore").to_csv(args.output, index=False)
+        print(f"\n{Fore.CYAN}>> DUMP SAVED TO MEMORY: {args.output}{Style.RESET_ALL}\n")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+venv/
+y
+y.pub
+*.csv
+__pycache__/
