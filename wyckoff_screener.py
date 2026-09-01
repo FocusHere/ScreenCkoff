@@ -30,18 +30,38 @@ except ImportError:
 
 
 # =====================================================================
-# BANNER ANNI '80 / ASCII ART
+# BANNER RETRÒ & GUDA INTERFACCIA
 # =====================================================================
 
 BANNER = f"""{Fore.CYAN}
 ░█▀█░█▀█░█▀▀░█▀▀░█▀█░░░█▀▀░█▀▀░█▀▄░█▀▀░█▀▀░█▀█░█▀▀░█▀▄
 ░█▀▀░█▀█░█▀▀░█▀▀░█░█░░░▀▀█░█░░░█▀▄░█▀▀░█▀▀░█░█░█▀▀░█▀▄
 ░▀░░░▀░▀░▀░░░▀░░░▀▀▀░░░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀░▀
-                                                                                              
+                                                      
 {Fore.MAGENTA}======================================================================
- [0x57][0x59][0x43][0x4B][0x4F][0x46][0x46] -- SYSTEM v2.0 (1984)
+ [0x57][0x59][0x43][0x4B][0x4F][0x46][0x46] -- SYSTEM v2.1 (RETRO TERMINAL)
 ======================================================================{Style.RESET_ALL}
 """
+
+LEGENDA = f"""
+{Fore.YELLOW}=== LEGENDA STRUTTURA & FASI WYCKOFF ==={Style.RESET_ALL}
+ ┌─────────────────┬─────────────────────────────────────────────────┐
+ │ Colonna         │ Descrizione                                     │
+ ├─────────────────┼─────────────────────────────────────────────────┤
+ │ STATUS          │ ✅ PASS = Fase attiva rilevata | ❌ NO = Assente  │
+ │ TICKER          │ Simbolo del titolo analizzato                  │
+ │ FASE ATTIVA     │ Fase di Wyckoff correntemente identificata      │
+ │ PREZZO          │ Ultimo prezzo di chiusura disponibile ($)       │
+ │ CICLI           │ Numero totale di strutture Wyckoff rilevate     │
+ └─────────────────┴─────────────────────────────────────────────────┘
+
+ {Fore.CYAN}Fasi del ciclo:{Style.RESET_ALL}
+  • {Fore.GREEN}support_base{Style.RESET_ALL}  : Accumulazione / Supporto (Compressione volatilità)
+  • {Fore.YELLOW}over_limit{Style.RESET_ALL}    : Breakout confermato con incremento di volume
+  • {Fore.CYAN}discovery{Style.RESET_ALL}     : Markup / Trend rialzista in espansione
+  • {Fore.RED}distribution{Style.RESET_ALL}  : Distribuzione / Possibile inversione ribassista
+"""
+
 
 @dataclass
 class Config:
@@ -309,26 +329,27 @@ def current_phase_label(cycles: List[dict]) -> str:
     return "nessuna fase"
 
 
-def fetch_top_100_large_caps() -> List[str]:
-    print(f"{Fore.CYAN}>> BUS INIT: Searching Top 100 Cap (> $12B)...")
+def fetch_all_yahoo_large_caps() -> List[str]:
+    """Recupera tutti i titoli con capitalizzazione > 10B disponibili tramite lo screener Yahoo Finance."""
+    print(f"{Fore.CYAN}>> BUS INIT: Recupero lista completa titoli da Yahoo Finance screener...")
     try:
-        q = yf.EquityQuery('and', [
-            yf.EquityQuery('gt', ['intradaymarketcap', 12_000_000_000]),
-            yf.EquityQuery('eq', ['region', 'us'])
-        ])
+        q = yf.EquityQuery('gt', ['intradaymarketcap', 10_000_000_000])
         scr = yf.Screener()
-        scr.set_body({'size': 100, 'offset': 0, 'sortField': 'intradaymarketcap', 'sortAsc': False, 'query': q.to_dict()})
+        scr.set_body({'size': 250, 'offset': 0, 'sortField': 'intradaymarketcap', 'sortAsc': False, 'query': q.to_dict()})
         res = scr.response
         tickers = [item['symbol'] for item in res.get('quotes', [])]
         if tickers:
-            return tickers[:100]
+            print(f"{Fore.GREEN}>> Recuperati {len(tickers)} titoli per l'analisi.")
+            return tickers
     except Exception:
         pass
-    
+
+    # Fallback su lista predefinita ampliata se la query screener diretta fallisce
     return [
         "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "UNH", "JNJ",
         "JPM", "V", "PG", "XOM", "MA", "HD", "CVX", "MRK", "ABBV", "LLY",
-        "AVGO", "PEP", "KO", "COST", "TMO", "MCD", "WMT", "CSCO", "ACN", "ABT"
+        "AVGO", "PEP", "KO", "COST", "TMO", "MCD", "WMT", "CSCO", "ACN", "ABT",
+        "ORCL", "BAC", "CRM", "AMD", "NFLX", "INTC", "DIS", "PFE", "NKE", "TXN"
     ]
 
 
@@ -345,33 +366,30 @@ def fetch_data(ticker: str, period: str = "1y", interval: str = "1d") -> Optiona
 def screen_ticker(ticker: str, cfg: Config = CFG, period: str = "1y") -> dict:
     df = fetch_data(ticker, period=period)
     if df is None or len(df) < cfg.sma_long + cfg.base_window:
-        return {"ticker": ticker, "status": "dati insufficienti", "passed": False, "current_phase": "N/D"}
+        return {"TICKER": ticker, "status": "dati insufficienti", "passed": False, "FASE ATTIVA": "N/D", "PREZZO": 0.0, "CICLI": 0}
 
     df = add_indicators(df, cfg)
     cycles = detect_wyckoff_cycles(df, cfg)
     phase = current_phase_label(cycles)
 
-    complete_cycles = sum(1 for c in cycles if "distribution" in c)
     passed = phase != "nessuna fase"
 
     return {
-        "ticker": ticker,
+        "TICKER": ticker,
         "status": "ok",
         "passed": passed,
-        "current_phase": phase,
-        "cicli_rilevati": len(cycles),
-        "cicli_completi": complete_cycles,
-        "ultimo_prezzo": round(float(df["Close"].iloc[-1]), 2),
+        "FASE ATTIVA": phase,
+        "CICLI": len(cycles),
+        "PREZZO": round(float(df["Close"].iloc[-1]), 2),
     }
 
 
 def screen_tickers(tickers: List[str], cfg: Config = CFG, period: str = "1y") -> pd.DataFrame:
     rows = []
-    
-    # Barra personalizzata stile retrò
+
     pbar = tqdm(
         tickers,
-        desc=f"{Fore.MAGENTA}[0xSCANNING]{Style.RESET_ALL}",
+        desc=f"{Fore.MAGENTA}[SCANNING]{Style.RESET_ALL}",
         bar_format="{l_bar}{bar:25}{r_bar}",
         colour="cyan"
     )
@@ -380,7 +398,7 @@ def screen_tickers(tickers: List[str], cfg: Config = CFG, period: str = "1y") ->
         t = t.strip().upper()
         if not t:
             continue
-        pbar.set_postfix_str(f"0xHEX_ADDR: {t}")
+        pbar.set_postfix_str(f"TARGET: {t}")
         res = screen_ticker(t, cfg, period)
         rows.append(res)
 
@@ -391,7 +409,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Wyckoff Phase Screener - 80s Edition")
     parser.add_argument("--tickers", type=str, help="Lista ticker separati da virgola")
     parser.add_argument("--file", type=str, help="File .txt con un ticker per riga")
-    parser.add_argument("--top100", action="store_true", help="Analizza i primi 100 titoli per Market Cap (>12B)")
+    parser.add_argument("--all", action="store_true", help="Analizza tutti i titoli reperibili su Yahoo Finance (>10B cap)")
     parser.add_argument("--period", type=str, default="1y", help="Periodo storico")
     parser.add_argument("--output", type=str, default="wyckoff_results.csv", help="File CSV di output")
     return parser.parse_args()
@@ -399,12 +417,13 @@ def parse_args():
 
 def main():
     print(BANNER)
+    print(LEGENDA)
 
     args = parse_args()
     tickers: List[str] = []
 
-    if args.top100:
-        tickers = fetch_top_100_large_caps()
+    if args.all:
+        tickers = fetch_all_yahoo_large_caps()
     elif args.tickers:
         tickers.extend(args.tickers.split(","))
     elif args.file:
@@ -412,39 +431,39 @@ def main():
             tickers.extend(line.strip() for line in f if line.strip())
 
     if not tickers:
-        print(f"{Fore.GREEN}>> SELECT SYSTEM OPERATION:")
-        print(" [0x01] EXECUTE SCAN: TOP 100 LARGE CAPS (> $12B)")
-        print(" [0x02] LOAD MEMORY FILE: tickers.txt")
-        choice = input(f"\n{Fore.YELLOW}ENTER OPTION (1/2): {Style.RESET_ALL}").strip()
+        print(f"\n{Fore.GREEN}>> MODALITÀ DI SCANSIONE:")
+        print(" [1] ANALISI COMPLETA TITOLI YAHOO FINANCE (> $10B Cap)")
+        print(" [2] CARICA FILE MEMORIA: tickers.txt")
+        choice = input(f"\n{Fore.YELLOW}SELEZIONA OPZIONE (1/2): {Style.RESET_ALL}").strip()
 
         if choice == "1":
-            tickers = fetch_top_100_large_caps()
+            tickers = fetch_all_yahoo_large_caps()
         elif choice == "2":
             with open("tickers.txt", "r", encoding="utf-8") as f:
                 tickers = [line.strip() for line in f if line.strip()]
         else:
             sys.exit(0)
 
-    print(f"\n{Fore.GREEN}>> SYSTEM READY. STARTING ANALYSIS AT {datetime.now().strftime('%H:%M:%S')}...\n")
-    
+    print(f"\n{Fore.GREEN}>> AVVIO SCANSIONE: {datetime.now().strftime('%H:%M:%S')} ({len(tickers)} titoli in coda)...\n")
+
     results = screen_tickers(tickers, CFG, period=args.period)
 
     print(f"\n{Fore.MAGENTA}======================================================================")
-    print(f"{Fore.CYAN}                      [0xOUTPUT] SCAN RESULTS                        ")
+    print(f"{Fore.CYAN}                      RISULTATI ANALISI SCREENER                      ")
     print(f"{Fore.MAGENTA}======================================================================\n{Style.RESET_ALL}")
-    
+
     if not results.empty:
         results["STATUS"] = results["passed"].apply(lambda x: f"{Fore.GREEN}✅ PASS" if x else f"{Fore.RED}❌ NO")
-        
-        cols_show = ["STATUS", "ticker", "current_phase", "ultimo_prezzo", "cicli_rilevati"]
+
+        cols_show = ["STATUS", "TICKER", "FASE ATTIVA", "PREZZO", "CICLI"]
         cols_show = [c for c in cols_show if c in results.columns]
 
-        pd.set_option('display.max_rows', 150)
+        pd.set_option('display.max_rows', 250)
         pd.set_option('display.width', 1000)
         print(results[cols_show].to_string(index=False))
 
         results.drop(columns=["STATUS"], errors="ignore").to_csv(args.output, index=False)
-        print(f"\n{Fore.CYAN}>> DUMP SAVED TO MEMORY: {args.output}{Style.RESET_ALL}\n")
+        print(f"\n{Fore.CYAN}>> REPORT SALVATO SU DISCO: {args.output}{Style.RESET_ALL}\n")
 
 
 if __name__ == "__main__":
